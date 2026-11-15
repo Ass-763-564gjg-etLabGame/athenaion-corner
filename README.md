@@ -5,6 +5,18 @@
 
 ![hero](shots/wide.jpg)
 
+## 在线预览
+
+**https://ass-763-564gjg-etlabgame.github.io/athenaion-corner/**
+
+首屏要下载约 186 MB 的 GLB，第一次打开请等进度条走完（本机约 1.4 秒，公网取决于带宽）。
+嫌重可以先关掉「植被」（86 MB）再刷新。
+
+## 视频
+
+[`video/athenaion-corner.mp4`](video/athenaion-corner.mp4) —— 56 秒，8 个机位：
+全景 → 台阶底仰视 → 瀑布侧移 → 攀爬上升 → 神像近景 → 瀑布正面 → 低角度长阶 → 拉远收官。
+
 ---
 
 ## 原项目
