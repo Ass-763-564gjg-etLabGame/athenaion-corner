@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Athenaion Corner · 开源多模型</title>
+<style>
+  :root { --ink:#e9e3d5; --dim:#8d95a3; --gold:#c9a227; --line:rgba(233,227,213,.14); }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; }
+  body {
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(120% 90% at 50% -10%, #6d7c8c 0%, #48535f 34%, #232a31 68%, #12161a 100%);
+  }
+  canvas { display:block; }
+
+  .badge {
+    position: fixed; left: 22px; top: 20px; z-index: 5; pointer-events: none;
+    padding: 11px 15px; border-radius: 8px;
+    background: rgba(10, 13, 17, .55); border: 1px solid var(--line); backdrop-filter: blur(8px);
+  }
+  .badge b { display:block; font-size:12px; letter-spacing:.18em; text-transform:uppercase; font-weight:600; }
+  .badge b i { color: var(--gold); font-style: normal; }
+  .badge span { display:block; margin-top:5px; font-size:11px; color:var(--dim); letter-spacing:.04em; }
+  .badge em { font-style:normal; color:#6f7a88; }
+
+  .dock {
+    position: fixed; right: 22px; bottom: 22px; z-index: 5;
+    display:flex; flex-direction:column; align-items:flex-end; gap:8px;
+  }
+  .group { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; max-width:520px; }
+  button {
+    font: inherit; font-size:11.5px; letter-spacing:.03em; color:var(--dim);
+    background: rgba(10,13,17,.6); border:1px solid var(--line); border-radius:999px;
+    padding:7px 13px; cursor:pointer; transition: all .16s; backdrop-filter: blur(8px);
+  }
+  button:hover:not(:disabled) { color:var(--ink); border-color: rgba(201,162,39,.5); }
+  button.on { background: var(--gold); border-color: var(--gold); color:#14181e; font-weight:600; }
+  button:disabled { opacity:.35; cursor:default; }
+
+  .stats {
+    position: fixed; left:22px; bottom:22px; z-index:5; pointer-events:none;
+    font-size:10.5px; letter-spacing:.08em; color:#6b7480; line-height:1.9;
+    text-transform: uppercase;
+  }
+  .stats b { color:#a9b2bd; font-weight:500; }
+
+  .veil {
+    position: fixed; inset:0; z-index:9; display:grid; place-items:center;
+    background:#0b0d10; transition: opacity .8s ease; text-align:center; line-height:2.1;
+    font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--dim);
+  }
+  .veil.hide { opacity:0; pointer-events:none; }
+  .veil small { display:block; text-transform:none; letter-spacing:.02em; color:#5f6773; font-size:11px; }
+  .bar { width:260px; height:2px; background:rgba(233,227,213,.12); margin:14px auto 0; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0%; background:var(--gold); transition:width .25s; }
+
+  /* 视频采集模式：隐藏所有 UI */
+  body.capture .badge, body.capture .dock, body.capture .stats, body.capture .veil { display:none !important; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div class="badge">
+  <b>ATHENAION CORNER <i>·</i> 构件拆解</b>
+  <span>8 个 GLB · 同一世界坐标 · <em id="state">载入中…</em></span>
+</div>
+
+<div class="dock">
+  <div class="group" id="parts"></div>
+  <div class="group" id="views"></div>
+  <div class="group" id="toggles"></div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="veil" id="veil">
+  载入场景 GLB
+  <small id="sub">从 athenaion 运行时场景裁剪导出</small>
+  <div class="bar"><i id="prog"></i></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { createFallMaterial } from './src/water/fallMesh.js';
+
+// ---------------------------------------------------------------- 渲染器
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.55;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x9ba1a4, 260, 900);
+
+const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.3, 4000);
+camera.position.set(32, 11, 104);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(15, 46, -8);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 3;
+controls.maxDistance = 420;
+controls.update();
+
+// ---------------------------------------------------------------- 天空与光照
+const SUN_EL = 40;   // 太阳高度角
+const SUN_AZ = 330;  // 方位角：从相机侧（南偏西）打光，神庙正面与台阶受光，和参考图一致
+
+const sky = new Sky();
+sky.scale.setScalar(4500);
+{
+  const u = sky.material.uniforms;
+  u.turbidity.value = 2.0;
+  u.rayleigh.value = 3.4;
+  u.mieCoefficient.value = 0.003;
+  u.mieDirectionalG.value = 0.8;
+  u.cloudCoverage.value = 0.35;
+  const phi = THREE.MathUtils.degToRad(90 - SUN_EL);
+  const theta = THREE.MathUtils.degToRad(SUN_AZ);
+  u.sunPosition.value.setFromSphericalCoords(1, phi, theta);
+
+  // Preetham 模型在 40° 太阳高度下天空辐射远高于地表（约 10~20 倍），
+  // 用同一个 ACES 曝光会把天顶压成灰白。这里单独把天空增益降下来，
+  // 让天顶恢复蓝色，同时地面仍按正常曝光。
+  sky.material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'gl_FragColor = vec4( texColor, 1.0 );',
+      'gl_FragColor = vec4( texColor * 0.09, 1.0 );'
+    );
+  };
+}
+scene.add(sky);
+
+const sunDir = sky.material.uniforms.sunPosition.value.clone();
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.22;
+
+const hemi = new THREE.HemisphereLight(0xbdd4ea, 0x6d5b45, 0.75);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xffeed2, 4.2);
+sun.position.copy(sunDir).multiplyScalar(320);
+sun.target.position.set(12, 48, -12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.camera.left = -130;
+sun.shadow.camera.right = 130;
+sun.shadow.camera.top = 140;
+sun.shadow.camera.bottom = -140;
+sun.shadow.camera.near = 20;
+sun.shadow.camera.far = 700;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.14;
+scene.add(sun, sun.target);
+
+// 背光补一点天光反射，避免背阴面死黑
+const fill = new THREE.DirectionalLight(0xa9c6e2, 0.35);
+fill.position.set(-120, 80, -150);
+scene.add(fill);
+
+// 裁剪盒底部的切面会露出来，用一块远景地面把「孤岛」接回地面
+const groundY = 1.0;
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(1600, 96).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x877c64, roughness: 1, metalness: 0 })
+);
+ground.position.y = groundY;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ---------------------------------------------------------------- 材质近似
+// GLB 里程序化 shader 已丢失，用材质名映射到接近的基础 PBR。
+const MAT = {
+  'marble-weathered':      { color: 0xcfc6b2, roughness: 0.74, metalness: 0.0 },
+  'marble-interior':       { color: 0x8b8276, roughness: 0.86 },
+  'acro-marble':           { color: 0xd2c9b6, roughness: 0.72 },
+  'acro-tread':            { color: 0xc7bca4, roughness: 0.78 },
+  'acro-paving':           { color: 0xbdb29b, roughness: 0.86 },
+  'acro-gold':             { color: 0xd9a63e, roughness: 0.30, metalness: 1.0 },
+  'gold':                  { color: 0xdcaa42, roughness: 0.27, metalness: 1.0 },
+  'bannerGold':            { color: 0xc9a227, roughness: 0.36, metalness: 1.0 },
+  'acro-bronze':           { color: 0x6f4a26, roughness: 0.52, metalness: 0.9 },
+  'bronze':                { color: 0x7c5531, roughness: 0.50, metalness: 0.88 },
+  'acro-dark':             { color: 0x241f1a, roughness: 0.95 },
+  'acro-void':             { color: 0x100e0c, roughness: 1.0 },
+  'acro-soil':             { color: 0x35281c, roughness: 1.0 },
+  'acro-mosaic':           { color: 0xcfc4ae, roughness: 0.62 },
+  'acro-fountain-water':   { color: 0x2a6f74, roughness: 0.08, metalness: 0.0, transparent: true, opacity: 0.85 },
+  'statueMarble':          { color: 0xd8d3c5, roughness: 0.58 },
+  'statueShield':          { color: 0xb08a3c, roughness: 0.34, metalness: 0.95 },
+  'statueOrnament':        { color: 0xc9a556, roughness: 0.40, metalness: 0.8 },
+  'statuePedestal':        { color: 0xc0b7a4, roughness: 0.72 },
+  'statueTablet':          { color: 0xc6bda9, roughness: 0.7 },
+  'ivyLeaf':               { rgb: [1.45, 1.60, 1.20], roughness: 0.62, side: 'double', alphaTest: 0.42 },
+  'oliveLeaf':             { color: 0x77895c, roughness: 0.66, side: 'double', alphaTest: 0.42 },
+  'oliveBark':             { color: 0x5a4c3c, roughness: 0.92 },
+  'bark':                  { color: 0x5a4c3c, roughness: 0.92 },
+  'floraRock-dry':         { color: 0x968b78, roughness: 0.94 },
+  'stoneRock':             { color: 0x8d8577, roughness: 0.94 },
+  'terrain':               { color: 0x8a7c60, roughness: 0.98 },
+  'waterfallSheet':        { color: 0xcfe6f5, roughness: 0.12, transparent: true, opacity: 0.55, side: 'double', depthWrite: false },
+  'aqStone':               { color: 0xb5aa94, roughness: 0.8 },
+  'aqWater':               { color: 0x4f6d72, roughness: 0.1, transparent: true, opacity: 0.8 },
+  'cityTerracotta':        { color: 0xa9663f, roughness: 0.85 },
+  'bannerCloth_L':         { color: 0x8c3a2e, roughness: 0.85, side: 'double' },
+  'bannerCloth_V':         { color: 0x8c3a2e, roughness: 0.85, side: 'double' },
+  'bannerCloth_S':         { color: 0x8c3a2e, roughness: 0.85, side: 'double' },
+  // 铜器 / 火盆 / 瓮
+  'brazierBronze2':        { color: 0x9c8150, roughness: 0.42, metalness: 0.9 },
+  'brazierLegs':           { color: 0x9c7445, roughness: 0.5, metalness: 0.85 },
+  'brazierInner':          { color: 0x3a2a1c, roughness: 0.9 },
+  'brazierCoals':          { color: 0x141110, roughness: 0.95 },
+  'urnBronze2':            { color: 0xb48a50, roughness: 0.35, metalness: 0.9 },
+  'urnPlant':              { color: 0x53603a, roughness: 0.82 },
+  'urnPlants0':            { color: 0x4d5c35, roughness: 0.82 },
+  'urnPlants1':            { color: 0x4d5c35, roughness: 0.82 },
+  'urnPlants2':            { color: 0x46542f, roughness: 0.82 },
+  'urnPlantsLo0':          { color: 0x4d5c35, roughness: 0.82 },
+  'urnPlantsLo1':          { color: 0x4d5c35, roughness: 0.82 },
+  // 岩石 / 苔藓 / 杂草
+  'cascadeRock':           { color: 0x8d8577, roughness: 0.94 },
+  'rapidsRock':            { color: 0x8b8375, roughness: 0.94 },
+  'stoneRock':             { color: 0x8d8577, roughness: 0.94 },
+  'marble-mossy':          { color: 0xb3ae98, roughness: 0.86 },
+  'propMarble':            { color: 0xe6dccb, roughness: 0.6 },
+  'acro-weeds':            { color: 0x5c6b3a, roughness: 0.9 },
+  'herbLeaf':              { color: 0x77804a, roughness: 0.75, side: 'double', alphaTest: 0.42 },
+  'mossCushion':           { color: 0x4a6431, roughness: 0.95 },
+  'bark-broad':            { color: 0x5a4c3c, roughness: 0.92 },
+  'bark-olive':            { color: 0x5a4c3c, roughness: 0.92 },
+  'bark-shrub':            { color: 0x52463a, roughness: 0.92 },
+  // 植被图集：导出时 baseColorFactor 只剩 0.25~0.4，直接渲染会接近纯黑；
+  // 图集本身偏暗，所以用 >1 的 RGB 把贴图整体提亮（乘算，不做色调改写）
+  'foliage-cypress-blob':  { rgb: [2.60, 2.80, 2.10], roughness: 0.85 },
+  'foliage-cypress-card':  { rgb: [2.60, 2.80, 2.10], roughness: 0.85, side: 'double', alphaTest: 0.42 },
+  'foliage-olive-blob':    { rgb: [2.30, 2.45, 1.85], roughness: 0.85 },
+  'foliage-olive-card':    { rgb: [2.30, 2.45, 1.85], roughness: 0.85, side: 'double', alphaTest: 0.42 },
+  'foliage-broad-blob':    { rgb: [2.30, 2.45, 1.85], roughness: 0.85 },
+  'foliage-broad-card':    { rgb: [2.30, 2.45, 1.85], roughness: 0.85, side: 'double', alphaTest: 0.42 },
+  'foliage-shrub-bb':      { rgb: [2.40, 2.55, 1.90], roughness: 0.85, side: 'double', alphaTest: 0.42 },
+  'foliage-shrub-blob':    { rgb: [2.40, 2.55, 1.90], roughness: 0.85 },
+  'foliage-shrub-card':    { rgb: [2.40, 2.55, 1.90], roughness: 0.85, side: 'double', alphaTest: 0.42 },
+};
+
+const CLAY = new THREE.MeshStandardMaterial({ color: 0xb6ae9e, roughness: 0.9, metalness: 0.0 });
+let clayMode = false;
+let model = null;
+const pairs = [];   // { mesh, mat }
+const seenMats = new Set();
+let triCount = 0, matCount = 0;
+
+// 石头表面的世界空间噪声：石粉污渍 + 近地泛碱，用来补上丢掉的程序化 shader 的层次
+const STONE = /^(marble|acro-(marble|tread|paving|mosaic)|statueMarble|propMarble|marble-mossy|terrain|stoneRock|cascadeRock|rapidsRock|aqStone)/;
+const NOISE_GLSL = `
+float cHash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float cNoise(vec3 p){
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(cHash(i), cHash(i + vec3(1,0,0)), f.x), mix(cHash(i + vec3(0,1,0)), cHash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(cHash(i + vec3(0,0,1)), cHash(i + vec3(1,0,1)), f.x), mix(cHash(i + vec3(0,1,1)), cHash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}`;
+
+function addStoneGrain(m) {
+  if (!STONE.test(m.name || '')) return;
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = 'varying vec3 vWPos;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  #ifdef USE_INSTANCING
+    vWPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+  #else
+    vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  #endif`
+    );
+    shader.fragmentShader = 'varying vec3 vWPos;\n' + NOISE_GLSL + '\n' + shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+      vec3 np = vWPos * 0.18;
+      float grain = cNoise(np) * 0.55 + cNoise(np * 4.1) * 0.3 + cNoise(np * 13.0) * 0.15;
+      diffuseColor.rgb *= mix(0.82, 1.10, grain);
+      // 近地泛碱/积尘
+      diffuseColor.rgb *= mix(0.74, 1.0, smoothstep(2.0, 26.0, vWPos.y));
+      // 轻微暖色偏移
+      diffuseColor.rgb *= vec3(1.03, 1.0, 0.955);`
+    );
+  };
+  m.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- 瀑布：直接复刻原版
+// 原项目的瀑布是程序化材质（src/water/fallMesh.js）：每个顶点带「出发时刻 τ」，片元在
+// (横向, 时间−τ) 上采样被水流拖长的噪声，所以水线随落差加速、越往下越碎、边缘会撕成细股。
+// GLB 只带几何，shader 与 aFall..aFall4 都会丢，因此把这两样旁挂导出（assets/falls.bin /
+// falls.json），这里直接用原版 createFallMaterial 驱动，不再手搓滚动贴图。
+const CROP = { x0: 2, x1: 68, y0: -2, y1: 108, z0: -62, z1: 108 };
+const staticFalls = [];
+let fallsReady = false;
+let fallsUniforms = null;
+let mist = null;
+
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+async function loadFalls() {
+  const meta = await (await fetch('./water/falls.json')).json();
+  const bin = await (await fetch('./water/falls.bin')).arrayBuffer();
+  const m = meta.meshes && meta.meshes[0];
+  if (!m) return;
+
+  const geo = new THREE.BufferGeometry();
+  const attr = (i, n) => new THREE.BufferAttribute(new Float32Array(bin, m.offs[i], m.lens[i] / 4), n);
+  geo.setAttribute('position', attr(0, 3));
+  geo.setAttribute('aFall', attr(1, 4));
+  geo.setAttribute('aFall2', attr(2, 4));
+  geo.setAttribute('aFall3', attr(3, 4));
+  geo.setAttribute('aFall4', attr(4, 4));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(bin, m.offs[5], m.lens[5] / 4), 1));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+
+  const { material, uniforms } = createFallMaterial({});
+  // 旁挂几何覆盖全站所有瀑布，只保留裁剪盒内的片元（否则盒外会有悬空的水片）
+  const baseCompile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, r) => {
+    baseCompile(shader, r);
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'void main() {',
+      `void main() {
+  if (vCgWorldPos.x < ${CROP.x0}.0 || vCgWorldPos.x > ${CROP.x1}.0 || vCgWorldPos.z < ${CROP.z0}.0 ||
+      vCgWorldPos.z > ${CROP.z1}.0 || vCgWorldPos.y < ${CROP.y0}.0 || vCgWorldPos.y > ${CROP.y1}.0) discard;`
+    );
+  };
+  material.needsUpdate = true;
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.name = 'waterfall-sheet-dynamic';
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 2;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  scene.add(mesh);
+
+  uniforms.uSunDirF.value.copy(sunDir).normalize();
+  fallsUniforms = uniforms;
+  // 原版水流动起来后再隐藏 GLB 里的静态水片；若导出失败则保持显示
+  fallsReady = true;
+  staticFalls.forEach((o) => { o.visible = false; });
+
+  buildMist(meta.falls || []);
+  window.__FALLS = { tris: m.tris, falls: (meta.falls || []).length, mist: mist ? mist.count : 0 };
+}
+
+// ---------------------------------------------------------------- 水花 / 水雾
+// 落点数据来自原版 waterfalls 的 impact（含强度 / 速度 / 半径），四种粒子照原版 mist.js：
+// 0 水雾、1 上升雾、2 落点翻涌、3 飞溅水珠，全部走同一个 instanced quad、一次 draw call。
+const MIST_VERT = /* glsl */`
+attribute vec3 iPos;    // 基准位置
+attribute vec4 iP;      // size(m), seed, life(s), phase
+attribute vec4 iM;      // 初速 xyz (m/s), 膨胀
+attribute vec4 iL;      // 密度, 类型, 重力, 拉伸
+attribute float iG;     // 落点地面高度
+uniform float uTime;
+uniform vec3 uSunDir;
+uniform vec3 uWind;
+varying vec2 vUv; varying vec3 vW; varying float vA; varying float vSeed; varying float vAge;
+varying float vKind; varying float vSize; varying float vG; varying vec2 vSun2;
+void main() {
+  float life = max(iP.z, 0.1);
+  float age = fract(uTime / life + iP.w);
+  float t = age * life;
+  float kind = iL.y;
+  float g = iL.z;
+  vec3 c = iPos + iM.xyz * t + vec3(0.0, -0.5 * g * t * t, 0.0) + uWind * t * (kind < 1.5 ? 1.0 : 0.25);
+  float size = iP.x * (0.55 + iM.w * age);
+  // 落点白水：底边必须压在水面/地面上，否则会变成浮在空中的白块
+  if (kind > 3.5) c.y = min(c.y, iG + size * iL.w * 0.65);
+  vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+  vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+  vec2 q = position.xy;
+  vec3 wp;
+  if (kind > 3.5) {
+    wp = c + right * q.x * size + vec3(0.0, 1.0, 0.0) * q.y * size * iL.w;
+  } else if (kind > 2.5) {
+    // 水珠：沿屏幕投影速度拉成细条（运动模糊）
+    vec3 vel = iM.xyz + vec3(0.0, -g * t, 0.0);
+    vec3 vv = (viewMatrix * vec4(vel, 0.0)).xyz;
+    vec2 ax = normalize(vv.xy + vec2(1e-4, 0.0));
+    vec3 A = right * ax.x + up * ax.y, S = right * -ax.y + up * ax.x;
+    float len = iP.x * (0.35 + 0.65 * clamp(length(vel) / 9.0, 0.0, 1.0));
+    wp = c + A * q.y * len * 1.7 + S * q.x * iP.x * 0.09;
+  } else {
+    float ang = iP.y * 6.2831 + age * (iP.y - 0.5) * 1.6;
+    float ca = cos(ang), sa = sin(ang);
+    vec2 rq = vec2(ca * q.x - sa * q.y, sa * q.x + ca * q.y);
+    wp = c + right * rq.x * size + up * rq.y * size * iL.w;
+  }
+  vW = wp; vUv = position.xy * 2.0; vSeed = iP.y; vAge = age; vKind = kind; vSize = size; vG = iG;
+  float fin = kind > 1.5 ? smoothstep(0.0, 0.16, age) : smoothstep(0.0, 0.22, age);
+  float fout = kind > 1.5 ? 1.0 - smoothstep(0.45, 1.0, age) : 1.0 - smoothstep(0.4, 1.0, age);
+  vA = iL.x * fin * fout;
+  vec3 sv = (viewMatrix * vec4(normalize(uSunDir), 0.0)).xyz;
+  vSun2 = sv.xy;
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+}
+`;
+
+const MIST_FRAG = /* glsl */`
+${NOISE_GLSL}
+float cFbm3(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * cNoise(p); p *= 2.02; a *= 0.5; } return s * 0.5333; }
+uniform float uTime;
+uniform vec3 uSunCol;
+uniform vec3 uSunDir;
+uniform vec3 uSkyAmb;
+uniform vec4 uMistK;    // x: 总不透明度, y: 阳光增益, z: 天光增益, w: 侵蚀
+varying vec2 vUv; varying vec3 vW; varying float vA; varying float vSeed; varying float vAge;
+varying float vKind; varying float vSize; varying float vG; varying vec2 vSun2;
+void main() {
+  float r2 = dot(vUv, vUv);
+  if (vKind < 3.5 && r2 > 1.0) discard;
+  float a, lit, n = 0.5;
+  if (vKind > 3.5) {
+    // 落水线：密实的白水从水面向上涨起，顶部被撕开
+    float f = 3.0 / max(vSize, 0.5);
+    vec3 np = vW * f * vec3(1.0, 0.6, 1.0) + vec3(vSeed * 17.3, -uTime * 0.9, vSeed * 5.1);
+    n = cFbm3(np);
+    float yy = vUv.y * 0.5 + 0.5;
+    float n2 = cNoise(np * 3.4 + vec3(0.0, -uTime * 1.6, 0.0));
+    float dd = length(vec2(vUv.x, yy * 1.1)) + (n - 0.5) * 0.65 + (n2 - 0.5) * 0.3 + vAge * 0.1;
+    a = (1.0 - smoothstep(0.38, 0.9, dd)) * (0.5 + 0.5 * smoothstep(0.3, 0.7, n))
+      * (0.6 + 0.4 * smoothstep(0.2, 0.65, n2 + 0.25 * (1.0 - yy))) * vA
+      * (1.0 - smoothstep(0.8, 1.0, abs(vUv.x))) * (1.0 - smoothstep(0.75, 1.0, vUv.y));
+    lit = clamp(0.62 + 0.8 * (n - 0.5) + 0.25 * (n2 - 0.5) + 0.3 * yy, 0.2, 1.0);
+  } else if (vKind > 2.5) {
+    // 飞溅水珠：亮核 + 两端渐细 + 颗粒感
+    float core = exp(-vUv.x * vUv.x * 9.0) * (1.0 - vUv.y * vUv.y);
+    float beads = 0.55 + 0.45 * cNoise(vec3(vSeed * 37.0, vUv.y * 3.0 + vSeed * 11.0, vSeed * 5.0));
+    a = core * beads * vA * 1.4;
+    lit = 1.0;
+  } else {
+    // 水雾 / 翻涌：世界空间噪声，相邻粒子共享同一场，叠起来是一团翻腾的白雾而不是一堆圆点
+    float f = (vKind > 1.5 ? 2.4 : 1.5) / max(vSize, 0.5);
+    vec3 np = vW * f + vec3(vSeed * 17.3, -uTime * 0.12 - vAge * 0.9, vSeed * 5.1);
+    n = cFbm3(np);
+    float n2 = cNoise(np * 3.1 + vec3(0.0, uTime * 0.3, 0.0));
+    float billow = n * 0.75 + n2 * 0.25;
+    float ero = vAge * (vKind > 1.5 ? 0.22 : 0.3);
+    float dn = billow - r2 * (vKind > 1.5 ? 0.75 : 0.55) - ero - (vKind > 1.5 ? 0.1 : 0.16);
+    float wisp = vKind > 1.5 ? smoothstep(-0.08, 0.36, dn) * (0.6 + 0.4 * smoothstep(0.3, 0.72, n2)) * (1.0 - 0.5 * smoothstep(0.3, 1.0, r2))
+                            : smoothstep(-0.14, 0.42, dn);
+    a = smoothstep(1.0, 0.78, r2) * wisp * vA;
+    if (vKind > 0.5 && vKind < 1.5) {
+      float soft = smoothstep(7.0, 16.0, vSize);
+      a = mix(a, exp(-3.2 * r2) * clamp(0.35 + 1.1 * (billow - 0.35), 0.0, 1.0) * vA, soft);
+    }
+    float sl = length(vSun2);
+    float side = dot(vUv, vSun2 / max(sl, 1e-3)) * min(sl * 1.4, 1.0);
+    lit = clamp(0.62 + 0.38 * side + 0.5 * (billow - 0.55) + 0.18 * vUv.y, 0.12, 1.0);
+    if (vKind > 0.5 && vKind < 1.5) lit = 0.72 + 0.28 * lit;
+  }
+  // 与地面 / 相机软过渡，避免硬切边
+  a *= smoothstep(vG - 1.0, vG + 0.7, vW.y);
+  float dc = distance(cameraPosition, vW);
+  a *= smoothstep(1.0, 6.0, dc) * smoothstep(0.4, 1.6, dc / max(vSize, 0.5));
+  a *= uMistK.x;
+  if (a < 0.002) discard;
+  vec3 V = normalize(cameraPosition - vW);
+  float mu = dot(-V, uSunDir);
+  float hg = 0.2929 / pow(max(1.72 - 1.2 * mu, 1e-3), 1.5) / 12.566;
+  vec3 col = uSkyAmb * uMistK.z * (0.95 + 0.35 * lit)
+           + uSunCol * uMistK.y * ((0.04 + 0.22 * lit) + min(2.2 * hg, 1.4));
+  gl_FragColor = vec4(col, a);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  gl_FragColor.rgb *= a;   // 预乘 alpha
+}
+`;
+
+function buildMist(fallsMeta) {
+  const list = fallsMeta.filter((f) => f.impact
+    && f.impact.x >= CROP.x0 && f.impact.x <= CROP.x1
+    && f.impact.z >= CROP.z0 && f.impact.z <= CROP.z1);
+  const rnd = mulberry32(20261115);
+  const items = [];
+
+  for (const f of list) {
+    const x = f.impact.x, z = f.impact.z;
+    // 落点没有 y：取水平最近的 landing 高度，没有落地记录就用 lip.y - drop
+    let gy = Math.max(0, f.lip.y - f.drop), best = 1e9;
+    for (const l of f.landings || []) {
+      const d = Math.hypot(l.x - x, l.z - z);
+      if (d < best) { best = d; gy = l.y; }
+    }
+    gy = Math.max(0, gy);
+    const s = Math.min(1, Math.max(0.25, f.impact.strength ?? 0.7));
+    const rad = Math.min(9, Math.max(2, (f.impact.radius ?? 4) * 0.55));
+    const dir = f.impact.dir || [0, 0];
+    const big = f.drop > 18;
+
+    // 落点翻涌
+    const nc = Math.round(16 + 22 * s);
+    for (let i = 0; i < nc; i++) {
+      const a = rnd() * 6.283, rr = Math.sqrt(rnd()) * rad * 0.7;
+      const size = 0.8 + rnd() * 1.4;
+      items.push({
+        pos: [x + Math.cos(a) * rr, gy + size * 0.55 + rnd() * 1.2, z + Math.sin(a) * rr],
+        size, life: 1.0 + rnd() * 1.1, growth: 0.9 + rnd() * 0.8,
+        vel: [Math.cos(a) * (0.4 + rnd() * 1.4) + dir[0] * 0.6, 2.2 + rnd() * 3.8 * s, Math.sin(a) * (0.4 + rnd() * 1.4) + dir[1] * 0.6],
+        density: 0.34 + rnd() * 0.28, kind: 2, gravity: 6.5 + rnd() * 2.5, stretch: 1.1, ground: gy,
+      });
+    }
+    // 上升水雾
+    const nm = Math.round(8 + 10 * s);
+    for (let i = 0; i < nm; i++) {
+      const a = rnd() * 6.283, rr = Math.sqrt(rnd()) * rad * 1.2;
+      const size = 3.5 + rnd() * 5.5;
+      items.push({
+        pos: [x + Math.cos(a) * rr, gy + size * 0.55 + rnd() * 1.5, z + Math.sin(a) * rr],
+        size, life: 5.0 + rnd() * 5.0, growth: 0.8 + rnd() * 0.5,
+        vel: [0.2 + rnd() * 0.5, 0.5 + rnd() * 0.8, 0.15 + rnd() * 0.4],
+        density: 0.07 + rnd() * 0.08, kind: 1, gravity: 0, stretch: 1.0, ground: gy - 0.6,
+      });
+    }
+
+    if (big) {
+      // 大瀑布脚下的整片水汽（很淡、很大，负责层次）
+      for (let i = 0; i < 3; i++) {
+        const size = 9 + rnd() * 5;
+        items.push({
+          pos: [x + (rnd() - 0.5) * rad, gy + size * 0.5 + rnd() * 2, z + (rnd() - 0.5) * rad],
+          size, life: 9 + rnd() * 4, growth: 0.7,
+          vel: [0.15, 0.35 + rnd() * 0.4, 0.1],
+          density: 0.045 + rnd() * 0.02, kind: 1, gravity: 0, stretch: 1.0, ground: gy - 1.0,
+        });
+      }
+      // 飞溅水珠（高落差才有）
+      const nd = Math.round(28 + 48 * s);
+      for (let i = 0; i < nd; i++) {
+        const a = rnd() * 6.283, out = 1.2 + rnd() * 3.2;
+        items.push({
+          pos: [x + Math.cos(a) * 0.8, gy + 0.6 + rnd() * 1.2, z + Math.sin(a) * 0.8],
+          size: 0.2 + rnd() * 0.35, life: 0.65 + rnd() * 0.75, growth: 0.2,
+          vel: [Math.cos(a) * out, 4.5 + rnd() * 5.5, Math.sin(a) * out],
+          density: 0.7 + rnd() * 0.3, kind: 3, gravity: 9.8, stretch: 1.0, ground: gy,
+        });
+      }
+      // 落水线白水
+      const nb = Math.round(4 + 5 * s);
+      for (let i = 0; i < nb; i++) {
+        const a = rnd() * 6.283, rr = Math.sqrt(rnd()) * rad * 0.8;
+        const size = 1.6 + rnd() * 2.4;
+        items.push({
+          pos: [x + Math.cos(a) * rr, gy, z + Math.sin(a) * rr],
+          size, life: 1.2 + rnd() * 1.2, growth: 0.6,
+          vel: [0, 0.5 + rnd() * 1.2, 0],
+          density: 0.55 + rnd() * 0.3, kind: 4, gravity: 0, stretch: 1.15, ground: gy,
+        });
+      }
+    }
+  }
+  if (!items.length) return;
+
+  const order = (it) => (it.kind === 1 ? 0 : it.kind === 4 ? 1 : it.kind === 2 ? 2 : 3);
+  items.sort((a, b) => order(a) - order(b));
+  const n = items.length;
+  const quad = new THREE.PlaneGeometry(1, 1);
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.index = quad.index;
+  geo.setAttribute('position', quad.getAttribute('position'));
+  const iPos = new Float32Array(n * 3), iP = new Float32Array(n * 4);
+  const iM = new Float32Array(n * 4), iL = new Float32Array(n * 4), iG = new Float32Array(n);
+  items.forEach((it, i) => {
+    iPos.set(it.pos, i * 3);
+    iP.set([it.size, rnd(), it.life, rnd()], i * 4);
+    iM.set([...it.vel, it.growth], i * 4);
+    iL.set([it.density, it.kind, it.gravity, it.stretch], i * 4);
+    iG[i] = it.ground;
+  });
+  geo.setAttribute('iPos', new THREE.InstancedBufferAttribute(iPos, 3));
+  geo.setAttribute('iP', new THREE.InstancedBufferAttribute(iP, 4));
+  geo.setAttribute('iM', new THREE.InstancedBufferAttribute(iM, 4));
+  geo.setAttribute('iL', new THREE.InstancedBufferAttribute(iL, 4));
+  geo.setAttribute('iG', new THREE.InstancedBufferAttribute(iG, 1));
+  geo.instanceCount = n;
+
+  const uniforms = {
+    uTime: { value: 0 },
+    uSunDir: { value: sunDir.clone().normalize() },
+    uSunCol: { value: new THREE.Color(3.2, 2.9, 2.4) },
+    uSkyAmb: { value: new THREE.Color(0.85, 0.95, 1.1) },
+    uWind: { value: new THREE.Vector3(0.35, 0, 0.25) },
+    uMistK: { value: new THREE.Vector4(0.9, 1.15, 1.6, 0) },
+  };
+  const mat = new THREE.ShaderMaterial({
+    name: 'waterMist',
+    uniforms,
+    vertexShader: MIST_VERT,
+    fragmentShader: MIST_FRAG,
+    transparent: true, depthWrite: false, depthTest: true,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'waterfall-mist';
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 10;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  scene.add(mesh);
+  mist = { mesh, uniforms, count: n };
+}
+
+function applyLook(root) {
+  const seen = seenMats;
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isInstancedMesh) return;
+    const g = o.geometry;
+    const n = g.index ? g.index.count / 3 : (g.attributes.position ? g.attributes.position.count / 3 : 0);
+    triCount += Math.round(n * (o.isInstancedMesh ? o.count : 1));
+
+    const list = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of list) {
+      if (!m || seen.has(m.uuid)) continue;
+      seen.add(m.uuid);
+      const p = MAT[m.name];
+      if (p) {
+        if (p.rgb) m.color.setRGB(p.rgb[0], p.rgb[1], p.rgb[2]);
+        else if (p.color !== undefined) m.color.setHex(p.color);
+        if (p.roughness !== undefined) m.roughness = p.roughness;
+        if (p.metalness !== undefined) m.metalness = p.metalness;
+        if (p.side === 'double') m.side = THREE.DoubleSide;
+        if (p.alphaTest !== undefined) { m.alphaTest = p.alphaTest; m.transparent = false; m.needsUpdate = true; }
+        if (p.transparent) { m.transparent = true; m.opacity = p.opacity ?? 1; }
+        if (p.depthWrite === false) m.depthWrite = false;
+      }
+      // 兜底：名字里带 marble/stone 的不要出现纯白
+      if (!p && /marble|stone|rock/i.test(m.name || '')) { m.color.setHex(0xc8bfab); m.roughness = Math.min(m.roughness ?? 0.8, 0.85); }
+      if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
+      // 树冠卡片大多是背光的薄面片，原 shader 有透光/环境项；这里用自发光贴图补上，
+      // 否则柏树/橄榄树会接近纯黑剪影。
+      if (m.map && /^foliage-|^ivyLeaf$/.test(m.name || '')) {
+        m.emissiveMap = m.map;
+        m.emissive.setRGB(0.85, 0.95, 0.62);
+        m.emissiveIntensity = /^ivyLeaf$/.test(m.name) ? 0.55 : 1.35;
+        m.needsUpdate = true;
+      }
+      // 这些材质的 COLOR_0 是原 shader 里的调色数据（叶子顶/背面各半色、苔藓遮罩），
+      // 直接当顶点色相乘会整片发黑，关掉后用材质色近似。
+      if (m.vertexColors && /^(ivyLeaf|oliveLeaf|herbLeaf|mossCushion|bark|oliveBark|bark-|acro-weeds)$/.test(m.name || '')) {
+        m.vertexColors = false;
+        m.needsUpdate = true;
+      }
+      if (m.isMeshStandardMaterial) { m.envMapIntensity = 0.5; addStoneGrain(m); }
+    }
+    matCount = seen.size;
+
+    const list2 = Array.isArray(o.material) ? o.material : [o.material];
+    const fallMat = list2.find((m) => m && /^waterfallSheet$/.test(m.name || ''));
+    // 静态水片先留着：原版瀑布载入成功后再隐藏，载入失败则仍有静止的水面可看
+    if (fallMat) { staticFalls.push(o); if (fallsReady) o.visible = false; }
+
+    o.castShadow = !fallMat;
+    o.receiveShadow = !fallMat;
+    list2.forEach((m) => { if (m && m.transparent && m.opacity < 0.7) o.castShadow = false; });
+    if (!fallMat) pairs.push({ mesh: o, mat: o.material });
+  });
+}
+
+// ---------------------------------------------------------------- 载入
+const veil = document.getElementById('veil');
+const prog = document.getElementById('prog');
+const sub = document.getElementById('sub');
+const stateEl = document.getElementById('state');
+const statsEl = document.getElementById('stats');
+const t0 = performance.now();
+
+loadFalls().catch((e) => {
+  console.error('[falls]', e);
+  stateEl.textContent = '瀑布复刻失败（保留静态水片）';
+});
+
+// ---------------------------------------------------------------- 构件（8 个 GLB，共用同一套世界坐标）
+// 导出时按世界坐标烘焙，原点一致；逐个 add 进同一个 group 就拼回完整场景，
+// 也可以单独只加载其中一个（例如只要神庙本体）。
+const PARTS = [
+  { id: 'temple-marble', label: '神庙·大理石' },
+  { id: 'statues', label: '雕像' },
+  { id: 'foliage', label: '植被' },
+  { id: 'trees', label: '树干' },
+  { id: 'ornament', label: '铜饰' },
+  { id: 'banners', label: '幡旗' },
+  { id: 'water-rock', label: '水与岩' },
+  { id: 'terrain-props', label: '地形道具' },
+];
+const partsRoot = new THREE.Group();
+partsRoot.name = 'athenaion-corner';
+scene.add(partsRoot);
+const partGroups = new Map();
+const loader = new GLTFLoader();
+
+(async () => {
+  for (let i = 0; i < PARTS.length; i++) {
+    const p = PARTS[i];
+    sub.textContent = `构件 ${i + 1}/${PARTS.length} · ${p.label}`;
+    const gltf = await loader.loadAsync(`./models/${p.id}.glb`);
+    const g = gltf.scene;
+    g.name = p.id;
+    applyLook(g);
+    partsRoot.add(g);
+    partGroups.set(p.id, g);
+    prog.style.width = (((i + 1) / PARTS.length) * 100).toFixed(1) + '%';
+  }
+
+  const ms = Math.round(performance.now() - t0);
+  veil.classList.add('hide');
+  stateEl.textContent = `${PARTS.length} 个构件`;
+  window.__CORNER = { tris: triCount, materials: matCount, parts: PARTS.length, ms };
+  window.__CORNER_READY = true;
+  statsEl.innerHTML = [
+    `<b>${(triCount / 1e6).toFixed(2)}M</b> 三角面`,
+    `<b>${PARTS.length}</b> 构件`,
+    `<b>${matCount}</b> 材质`,
+    `<b>${ms}</b> ms 载入`,
+  ].join(' &nbsp;·&nbsp; ');
+
+  // 构件开关：点一下只看这一类，用来验证「确实是拆开的」
+  const partsEl = document.getElementById('parts');
+  for (const p of PARTS) {
+    const b = document.createElement('button');
+    b.textContent = p.label;
+    b.classList.add('on');
+    b.dataset.id = p.id;
+    b.onclick = () => {
+      const g = partGroups.get(p.id);
+      if (!g) return;
+      g.visible = !g.visible;
+      b.classList.toggle('on', g.visible);
+    };
+    partsEl.appendChild(b);
+  }
+  console.log(`[corner] loaded ${triCount} tris, ${matCount} materials, ${PARTS.length} parts in ${ms} ms`);
+})().catch((err) => {
+  console.error(err);
+  stateEl.textContent = '载入失败';
+  sub.textContent = String(err.message || err);
+});
+
+// ---------------------------------------------------------------- 机位
+const VIEWS = [
+  { id: 'stair', name: '大台阶', pos: [32, 11, 104], target: [15, 46, -8], fov: 48 },
+  { id: 'top', name: '台阶顶', pos: [24, 62, 6], target: [20, 30, 78], fov: 48 },
+  { id: 'foot', name: '台阶底', pos: [24, 5, 100], target: [18, 52, 4], fov: 55 },
+  { id: 'east', name: '东侧台地', pos: [92, 62, 26], target: [34, 52, -26], fov: 50 },
+  { id: 'wide', name: '全景', pos: [108, 86, 118], target: [16, 40, -14], fov: 45 },
+];
+let viewId = 'stair';
+
+const viewsEl = document.getElementById('views');
+for (const v of VIEWS) {
+  const b = document.createElement('button');
+  b.textContent = v.name;
+  b.dataset.id = v.id;
+  b.onclick = () => setView(v.id);
+  viewsEl.appendChild(b);
+}
+function setView(id) {
+  const v = VIEWS.find((x) => x.id === id) || VIEWS[0];
+  viewId = v.id;
+  camera.position.set(...v.pos);
+  camera.fov = v.fov;
+  camera.updateProjectionMatrix();
+  controls.target.set(...v.target);
+  controls.update();
+  syncUI();
+}
+
+// ---------------------------------------------------------------- 开关
+const togglesEl = document.getElementById('toggles');
+const toggles = [
+  {
+    id: 'clay', name: '几何素模', on: false,
+    run: (on) => {
+      clayMode = on;
+      for (const p of pairs) {
+        if (on) p.mesh.material = CLAY;
+        else p.mesh.material = p.mat;
+      }
+    },
+  },
+  {
+    id: 'shadow', name: '阴影', on: true,
+    run: (on) => { renderer.shadowMap.enabled = on; scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) o.material && (o.material.needsUpdate = true); }); },
+  },
+  {
+    id: 'spin', name: '环绕', on: false,
+    run: (on) => { controls.autoRotate = on; controls.autoRotateSpeed = 0.35; },
+  },
+];
+
+for (const t of toggles) {
+  const b = document.createElement('button');
+  b.textContent = t.name;
+  b.dataset.id = t.id;
+  b.classList.toggle('on', t.on);
+  b.onclick = () => {
+    t.on = !t.on;
+    b.classList.toggle('on', t.on);
+    t.run(t.on);
+  };
+  togglesEl.appendChild(b);
+}
+
+function syncUI() {
+  viewsEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.id === viewId));
+}
+
+// ---------------------------------------------------------------- 循环
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+let lastT = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min(0.06, (now - lastT) / 1000);
+  lastT = now;
+  if (fallsUniforms) {
+    fallsUniforms.uTime.value += dt;
+    fallsUniforms.uSunDirF.value.copy(sunDir).normalize();
+  }
+  if (mist) mist.uniforms.uTime.value += dt;
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+setView('stair');
+syncUI();
+
+// ---------------------------------------------------------------- 视频采集
+// ?capture=1：隐藏 UI、停掉实时循环，由外部按「视频时间 t」逐帧驱动相机与水体时间，
+// 这样帧与帧之间的水流是完全确定的，编码出来不会忽快忽慢。
+const CAPTURE = new URLSearchParams(location.search).has('capture');
+if (CAPTURE) {
+  document.body.classList.add('capture');
+  renderer.setAnimationLoop(null);
+  window.__CAP = (t, pos, target, fov) => {
+    camera.position.set(pos[0], pos[1], pos[2]);
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    camera.lookAt(target[0], target[1], target[2]);
+    if (fallsUniforms) {
+      fallsUniforms.uTime.value = t;
+      fallsUniforms.uSunDirF.value.copy(sunDir).normalize();
+    }
+    if (mist) mist.uniforms.uTime.value = t;
+    renderer.render(scene, camera);
+  };
+}
+</script>
+</body>
+</html>
